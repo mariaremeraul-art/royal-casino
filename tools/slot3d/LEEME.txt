@@ -7,3 +7,11 @@ Tragaperras 3D (Royal Casino) — capa visual, no decide resultados ni pagos.
                      (cambia el bundle de bj3d por el común, añade CSS y 3 enganches: trInit/trGirar/trPremio)
 - rebuild.sh         build + patch. OJO: sobrescribe index.html desde esa copia; si index.html cambió después, rehaz la copia.
 - shot.mjs / test-fallback.mjs / test-bj.mjs   pruebas rápidas headless -> capturas/
+
+Póker de 2 cartas 3D (13/11/2026)
+- /workspace/bj3d/src/bj3d.js es ahora una fábrica makeTable(K): la misma mesa, crupier, cartas y fichas sirven al
+  blackjack (window.BJ3D) y al póker de 2 cartas, modo Vs Crupier (window.PK3D). Copia previa: bj3d-antes-poker.js.
+- pk3d_patch.py: avisos pk3d(show,res) en pkStart/pkSubir/pkRetirar/pkResolver (no tocan apuestas ni pagos;
+  se mantiene el bloqueo pkLive), CSS src/pk3d.css (3D + 2D en móvil y botones del blackjack en 2 filas).
+- Pruebas: pk-test.mjs [2d] (ganar/perder/empatar/retirarse, botones sobre la barra), pk-modo.mjs (Con amigos=2D,
+  animaciones desactivadas, sin restos al salir). Capturas en poker3d/.
