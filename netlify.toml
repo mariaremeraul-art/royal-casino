@@ -1,0 +1,22 @@
+[build]
+  command = "rm -rf dist && mkdir dist && cp index.html manifest.webmanifest sw.js icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png dist/ && cp -r fonts dist/"
+  publish = "dist"
+  functions = "netlify/functions"
+
+# La página y el service worker nunca se quedan viejos en el móvil
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "no-cache"
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json"
