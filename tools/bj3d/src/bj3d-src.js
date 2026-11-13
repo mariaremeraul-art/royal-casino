@@ -365,14 +365,35 @@ function kick() { if (S && S.on && !S.raf && !document.hidden) S.raf = requestAn
 function resize() {
   if (!S) return;
   const w = Math.max(200, S.host.clientWidth || 360);
-  const h = Math.round(Math.min(460, Math.max(320, w * 0.98)));
-  S.host.style.height = h + 'px';
+  const ideal = Math.round(Math.min(460, Math.max(320, w * 0.98)));
+  let h = ideal;
+  // En móvil, bajar la mesa para que TÚ + Nueva/Pedir/Plantarse queden sobre la barra, sin scroll.
+  // En escritorio se deja la altura de siempre.
+  if (window.innerWidth <= 900) {
+    const nav = document.querySelector('.bottom-nav');
+    const navTop = nav ? nav.getBoundingClientRect().top : ((window.innerHeight || 800) - 70);
+    const tableTop = S.host.getBoundingClientRect().top;
+    const row = S.host.nextElementSibling;
+    const nueva = document.getElementById('bj-nueva');
+    const pedir = document.getElementById('bj-carta');
+    let need = 120;
+    if (row && nueva && pedir) {
+      const cs = getComputedStyle(row);
+      const mt = parseFloat(cs.marginTop) || 8;
+      const gap = parseFloat(cs.rowGap || cs.gap) || 8;
+      need = mt + (nueva.offsetHeight || 44) + gap + (pedir.offsetHeight || 44) + 8;
+    }
+    const cap = Math.floor(navTop - tableTop - need);
+    h = Math.round(Math.min(ideal, Math.max(200, cap)));
+  }
+  if (S.host.style.height !== h + 'px') S.host.style.height = h + 'px';
   S.w = w; S.h = h;
   S.r.setSize(w, h, false);
   const cam = S.cam; cam.aspect = w / h;
   const tgt = new Vector3(0, 0.32, 0.05);
   const hf = 2 * Math.atan(Math.tan(cam.fov * Math.PI / 360) * cam.aspect);
-  const dist = Math.max(3.3, 2.05 / Math.tan(hf / 2));
+  let dist = Math.max(3.3, 2.05 / Math.tan(hf / 2));
+  if (h + 2 < ideal) dist = Math.max(dist, 1.55 / Math.tan(cam.fov * Math.PI / 360));
   const el = 0.7;
   cam.position.set(0, tgt.y + dist * Math.sin(el), tgt.z + dist * Math.cos(el));
   cam.lookAt(tgt); cam.updateProjectionMatrix();

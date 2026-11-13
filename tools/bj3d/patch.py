@@ -4,7 +4,18 @@ s=open(P,encoding='utf-8').read()
 assert 'bj3d-cv' not in s
 css='''<style id="bj3d-css">
 /* Blackjack 3D: el lienzo WebGL sustituye al tapete; si no hay WebGL no se aplica nada */
-#blackjack .bj-table.bj3d{padding:0!important;min-height:0;overflow:hidden;background:#12040c!important;border-color:#c9a227}
+#blackjack .bj-table.bj3d{padding:0!important;min-height:0;overflow:hidden;background:#12040c!important;border-color:#c9a227;height:clamp(200px,calc(100vh - 520px),323px);height:clamp(200px,calc(100dvh - 520px),323px)}
+@media (min-width:901px){#blackjack .bj-table.bj3d{height:auto}}
+@media (max-width:900px) and (max-height:950px){
+#blackjack:has(.bj-table.bj3d) h2{margin:0 0 4px;font-size:20px}
+#blackjack:has(.bj-table.bj3d) .mesa-picker{padding:0 0 4px}
+#blackjack:has(.bj-table.bj3d) .mesa-btn{padding:6px 4px}
+#blackjack:has(.bj-table.bj3d) .mesa-tag{margin:0 0 4px}
+#blackjack:has(.bj-table.bj3d) .bj-side{font-size:11px;line-height:1.25;padding:5px 8px 5px 32px;margin:4px 0;background-size:16px 16px;background-position:8px 6px}
+#blackjack:has(.bj-table.bj3d) #bj-info,#blackjack:has(.bj-table.bj3d) .info{margin:2px 0 4px!important}
+#blackjack .bj-table.bj3d{margin-top:6px;margin-bottom:0}
+#blackjack .bj-table.bj3d + .btn-row{margin-top:8px}
+}
 #blackjack .bj-table.bj3d::before,#blackjack .bj-table.bj3d::after{display:none}
 #blackjack .bj-table.bj3d > canvas.bj3d-cv{position:absolute;left:0;top:0;width:100%;height:100%;display:block;z-index:0}
 #blackjack .bj-table.bj3d .bj-label{position:absolute;z-index:2;transform:translate(-50%,0);margin:0!important;white-space:nowrap;background:rgba(0,0,0,.5);border-radius:999px;padding:2px 10px;font-size:.74rem;pointer-events:none}
