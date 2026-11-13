@@ -1,0 +1,58 @@
+<style id="pk3d-css">
+/* Póker de 2 cartas 3D: la mesa ocupa el fieltro; las zonas 2D quedan ocultas pero siguen existiendo para la lógica */
+#poker .pc-felt.pk3d{padding:0!important;min-height:0;overflow:hidden;background:#12040c!important;height:300px;margin:6px 0 0}
+#poker .pc-felt.pk3d::before,#poker .pc-felt.pk3d::after{display:none}
+#poker .pc-felt.pk3d > canvas.bj3d-cv{position:absolute;left:0;top:0;width:100%;height:100%;display:block;z-index:0}
+#poker .pc-felt.pk3d .zone{position:absolute;left:50%;top:0;width:1px;height:1px;margin:0;padding:0;overflow:hidden;visibility:hidden}
+#poker .pc-felt.pk3d .bet-spot{position:absolute;z-index:2;transform:translate(-50%,-50%);margin:0;min-height:0;pointer-events:none}
+#poker .pc-felt.pk3d .bet-spot .chip-stk{display:none}
+#poker .pc-felt.pk3d .bet-spot .chips{background:rgba(0,0,0,.55);border-radius:999px;padding:1px 8px;font-size:.7rem;white-space:nowrap;min-height:0;gap:0}
+#poker .pc-felt.pk3d .bet-spot .chips span{margin:0}
+#poker .pc-felt.pk3d #pk-nombre{position:absolute;z-index:2;left:50%;bottom:6px;transform:translateX(-50%);margin:0!important;white-space:nowrap;background:rgba(0,0,0,.55);border-radius:999px;padding:2px 10px;font-size:.78rem;pointer-events:none}
+@media (min-width:901px){#poker .pc-felt.pk3d{height:auto}}
+/* Móvil: Nueva mano, Repetir, Igualar, Subir, Retirarse y «← Juegos» visibles sobre la barra sin hacer scroll (3D y 2D) */
+@media (max-width:900px){
+ #poker h2{margin:0 0 4px;font-size:20px}
+ #poker .mesa-picker{padding:0 0 4px}
+ #poker .mesa-btn{padding:6px 4px}
+ #poker .mesa-tag{margin:0 0 4px}
+ #poker .variant-bar{margin:4px 0}
+ #poker .variant-bar button{padding:6px 12px}
+ #poker .pc-felt:not(.pk3d){padding:6px 8px!important;margin:6px 0 0}
+ #poker .pc-felt:not(.pk3d) .zone{margin:4px 0;padding:4px}
+ #poker .pc-felt:not(.pk3d) .zone-lab{margin-bottom:2px}
+ #poker .pc-felt:not(.pk3d) .pk-mano:not(:has(.pc)){min-height:60px}
+ #poker .pc-felt:not(.pk3d) .bet-spot{min-height:0;margin:2px auto}
+ #poker #pk-info{margin:4px 0!important;min-height:1.3em}
+ #poker .pk-why{margin:0 0 2px;font-size:12px;line-height:1.25}
+ #poker .mesa-tag{display:none}
+ #poker .pc-felt:not(.pk3d) .zone{position:relative}
+ #poker .pc-felt:not(.pk3d) .zone-lab{position:absolute;left:8px;top:4px;margin:0;font-size:10px}
+ #poker .pc-felt:not(.pk3d) .pc-hand{min-height:0}
+ #poker .pc-felt:not(.pk3d) .pc{--w:48px}
+ #poker #pk-solo-btns,#blackjack .btn-row:has(#bj-nueva){display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:6px}
+ #blackjack .btn-row:has(#bj-nueva){grid-template-columns:repeat(4,minmax(0,1fr))}
+ #blackjack .btn-row:has(#bj-nueva) button{grid-column:auto!important}
+ #poker #pk-solo-btns button,#blackjack .btn-row:has(#bj-nueva) button{min-width:0;width:100%;padding:9px 4px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ #poker #pk-solo-btns[style*="none"]{display:none!important}
+ #poker #pk-solo-btns + .btn-row,#blackjack .btn-row:has(#bj-nueva) + .btn-row{margin-top:6px}
+ /* Blackjack 2D (sin WebGL2): mismo encabezado compacto que en 3D y mesa más baja */
+ #blackjack h2{margin:0 0 4px;font-size:20px}
+ #blackjack .mesa-picker{padding:0 0 4px}
+ #blackjack .mesa-btn{padding:6px 4px}
+ #blackjack .mesa-tag,#poker .mesa-tag{display:none}
+ #blackjack .variant-bar{margin:4px 0}
+ #blackjack .variant-bar button{padding:6px 12px}
+ #blackjack .bj-table:not(.bj3d)::before{display:none}
+ #blackjack .bj-side{font-size:10.5px;line-height:1.2;padding:4px 8px 4px 30px;margin:3px 0;background-size:16px 16px;background-position:8px 6px}
+ #blackjack #bj-info{margin:2px 0 4px!important}
+ #blackjack .bj-table:not(.bj3d){padding:6px 8px 8px!important;margin:6px 0 0}
+ #blackjack .bj-table:not(.bj3d) .bj-label{margin:0 0 2px!important;font-size:11px}
+ #blackjack .bj-table:not(.bj3d) #bj-label-j{margin-top:4px!important}
+ #blackjack .bj-table:not(.bj3d) .pc-hand{min-height:0}
+ #blackjack .bj-table:not(.bj3d) .pc{--w:40px}
+ #blackjack .bj-table:not(.bj3d) .bj-hand:empty::before,#blackjack .bj-table:not(.bj3d) .bj-hand:empty::after{width:40px;height:57px}
+ #blackjack .bj-table:not(.bj3d) .bet-spot{min-height:0;margin:2px auto 0}
+ #blackjack .bj-table:not(.bj3d) .bet-spot .chips{transform:scale(.85)}
+}
+</style>
