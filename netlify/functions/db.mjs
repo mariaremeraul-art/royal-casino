@@ -4,6 +4,19 @@ import { randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto
 
 const OWNER_CODE = process.env.OWNER_CODE || "";
 const VIP_MIN = 500000; // por debajo de 500.000 fichas (saldo + fichas en una mesa abierta) se pierde el VIP
+const VIP_AUTO = 1000000; // al pedir el VIP con MÁS de 1.000.000 fichas (saldo guardado en el servidor) se concede solo
+const VIP_HOLD_MS = 10 * 60 * 1000; // fichas apostadas en una ronda sin resolver: cuentan para el VIP como mucho 10 min
+// Decide si se pierde el VIP al guardar. saldo + mesa (Hold'em) es lo de siempre; "enJuego" son fichas apostadas
+// en una mano/tirada/carrera que aún no se ha resuelto: mientras dure, no se quita el VIP (como mucho VIP_HOLD_MS).
+function vipCheck(p, saldo, mesa, enJuego, now) {
+  if (!p || !p.vip) return "keep";
+  if (saldo + mesa >= VIP_MIN) { if (p.vipHold) { p.vipHold = null; return "dirty"; } return "keep"; }
+  if (enJuego > 0 && saldo + mesa + enJuego >= VIP_MIN) {
+    if (!p.vipHold) { p.vipHold = { since: now }; return "dirty"; }
+    return now - num(p.vipHold.since) > VIP_HOLD_MS ? "lose" : "keep";
+  }
+  return "lose";
+}
 const LOAN_MIN = 100, LOAN_MAX = 1000, LOAN_INTEREST = 0.10;
 const BOTE_BASE = 100, BOTE_MAX_MULT = 10;
 async function getBote(store, pool) {
@@ -20,6 +33,14 @@ const num = v => (Number.isFinite(+v) ? +v : 0);
 
 async function getPlayer(store, id) { return (await store.get("p/" + id, { type: "json" })) || null; }
 async function putPlayer(store, p) { await store.setJSON("p/" + p.id, p); }
+/* ---- Baneos (los pone el dueño): ban/<usuario> = { user, until (0 = para siempre), reason, at } ---- */
+async function getBan(store, u) {
+  if (!u) return null;
+  const b = await store.get("ban/" + encodeURIComponent(String(u).trim().toLowerCase()), { type: "json" });
+  if (!b) return null;
+  if (b.until && b.until <= Date.now()) return null;
+  return b;
+}
 
 /* ---- Torneo global ---- */
 const TOR_HOURS = 6, TOR_BASE_PRIZE = 50000, TOR_FEE = 50;
@@ -314,6 +335,14 @@ export default async (req) => {
   const isOwner = () => !!OWNER_CODE && (req.headers.get("x-owner-code") || "") === OWNER_CODE;
 
   try {
+    // Cuentas baneadas: no pueden entrar ni jugar online hasta que acabe el baneo
+    if (!route.startsWith("owner/") && route !== "logout" && !(route === "bote" && req.method === "GET")) {
+      let bu = await sessionUser(store, req);
+      if (!bu) { const bid = String(body.id || url.searchParams.get("id") || ""); if (bid.startsWith("u_")) bu = bid.slice(2); }
+      if (!bu && (route === "login" || route === "recover")) bu = body.user;
+      const ban = await getBan(store, bu);
+      if (ban) return json({ error: "BANNED", ban: { until: ban.until || 0, reason: ban.reason || "", at: ban.at } }, 403);
+    }
     /* ---- Cuentas ---- */
     if (route === "register" && req.method === "POST") {
       const user = String(body.user || "").trim(), u = normUser(user), pass = String(body.pass || "");
@@ -387,10 +416,14 @@ export default async (req) => {
             p.saldoAt = saveNow;
             dirty = true;
           }
-          // VIP: si su dinero (saldo + fichas en una mesa abierta) baja de 500.000, lo pierde y tiene que volver a pedirlo
+          // VIP: si su dinero (saldo + fichas en una mesa abierta) baja de 500.000, lo pierde y tiene que volver a pedirlo.
+          // Si baja solo porque tiene fichas apostadas en una ronda sin resolver, se espera a que se resuelva.
           const mesa = Math.max(0, Math.min(1e12, Math.floor(num(b.mesa))));
-          if (p && p.vip && !num(p.adjust) && Math.max(0, num(b.saldo)) + mesa < VIP_MIN) {
-            p.vip = false; p.vipReq = null; p.vipLost = { at: saveNow, saldo: Math.floor(num(b.saldo)), mesa };
+          const enJuego = Math.max(0, Math.min(1e12, Math.floor(num(b.enJuego))));
+          const vc = p && !num(p.adjust) ? vipCheck(p, Math.max(0, num(b.saldo)), mesa, enJuego, saveNow) : "keep";
+          if (vc === "dirty") dirty = true;
+          if (vc === "lose") {
+            p.vip = false; p.vipReq = null; p.vipAuto = null; p.vipHold = null; p.vipLost = { at: saveNow, saldo: Math.floor(num(b.saldo)), mesa, enJuego };
             dirty = true; vipLost = true;
           }
           if (dirty) await putPlayer(store, p);
@@ -491,9 +524,13 @@ export default async (req) => {
       // Si el dueño ha cambiado algo mientras tanto, no lo pisamos
       const fresh = await getPlayer(store, id);
       if (fresh) {
-        for (const k of ["loan", "loansHistory", "vip", "vipReq", "vipLost", "recargado", "recargas", "recReq"]) p[k] = fresh[k];
+        for (const k of ["loan", "loansHistory", "vip", "vipReq", "vipLost", "vipAuto", "vipHold", "recargado", "recargas", "recReq"]) p[k] = fresh[k];
         const extra = num(fresh.adjust) - adjust;
         if (extra > 0 || extra < 0) { p.adjust = extra; }
+      }
+      // Apuesta sin resolver durante más de 10 min con el dinero por debajo de 500.000: se pierde el VIP (no vale dejar una mano abierta)
+      if (p.vip && p.vipHold && now - num(p.vipHold.since) > VIP_HOLD_MS) {
+        p.vip = false; p.vipReq = null; p.vipAuto = null; p.vipHold = null; p.vipLost = { at: now, saldo: Math.floor(num(p.saldo)), mesa: 0, hold: true };
       }
       await putPlayer(store, p);
       return json({ ok: true, adjust, loan: p.loan || null, vip: !!p.vip, vipReq: !!p.vipReq, vipLost: (!p.vip && p.vipLost && num(p.vipLost.at)) || null, recReq: p.recReq || null, recLast: (p.recargas || []).slice(-1)[0] || null });
@@ -505,7 +542,16 @@ export default async (req) => {
       if (!p) return json({ error: "Jugador no encontrado, recarga la página" }, 404);
       if (!accName(p)) return json({ error: "Necesitas una cuenta para pedir la zona VIP" }, 400);
       if (p.vip) return json({ ok: true, vip: true, vipReq: false });
-      if (num(p.saldo) < VIP_MIN) return json({ error: "Necesitas al menos 500.000 fichas para pedir la zona VIP" }, 400);
+      const saldoSrv = num(p.saldo); // saldo guardado en el servidor, nunca uno que mande el cliente
+      if (saldoSrv < VIP_MIN) return json({ error: "Necesitas al menos 500.000 fichas para pedir la zona VIP" }, 400);
+      // Más de 1.000.000 al pedirlo (o al volver a pedirlo): se concede solo, sin esperar al dueño
+      if (saldoSrv > VIP_AUTO) {
+        const now = Date.now();
+        p.vip = true; p.vipReq = null; p.vipSince = now; p.vipLost = null; p.vipHold = null;
+        p.vipAuto = { at: now, saldo: Math.floor(saldoSrv) };
+        await putPlayer(store, p);
+        return json({ ok: true, vip: true, vipReq: false, auto: true });
+      }
       if (!p.vipReq) { p.vipReq = { at: Date.now() }; await putPlayer(store, p); }
       return json({ ok: true, vip: false, vipReq: true });
     }
@@ -839,6 +885,9 @@ export default async (req) => {
         const { blobs } = await store.list({ prefix: "p/" });
         const players = (await Promise.all(blobs.map(b => store.get(b.key, { type: "json" })))).filter(Boolean);
         players.sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+        const bl = await store.list({ prefix: "ban/" });
+        const bans = (await Promise.all(bl.blobs.map(b => store.get(b.key, { type: "json" })))).filter(b => b && (!b.until || b.until > Date.now()));
+        for (const b of bans) { const pl = players.find(x => x.id === "u_" + b.user); if (pl) pl.ban = { until: b.until || 0, reason: b.reason || "", at: b.at }; }
         return json({ players });
       }
       if (route === "owner/adjust" && req.method === "POST") {
@@ -900,10 +949,26 @@ export default async (req) => {
         await putPlayer(store, p);
         return json({ ok: true, player: p, chips });
       }
+      if (route === "owner/ban" && req.method === "POST") {
+        const id = cleanId(body.id); const u = id.startsWith("u_") ? normUser(id.slice(2)) : normUser(body.user);
+        if (!u || !(await getAcc(store, u))) return json({ error: "Solo se pueden banear cuentas con usuario" }, 404);
+        const minutes = Math.floor(num(body.minutes));
+        if (!(minutes >= 0 && minutes <= 5256000)) return json({ error: "Tiempo no válido" }, 400);
+        const reason = cleanTxt(String(body.reason || "").trim(), 120) || "Sin motivo";
+        const b = { user: u, until: minutes ? Date.now() + minutes * 60000 : 0, reason, at: Date.now() };
+        await store.setJSON("ban/" + userKey(u), b);
+        return json({ ok: true, ban: b });
+      }
+      if (route === "owner/unban" && req.method === "POST") {
+        const id = cleanId(body.id); const u = id.startsWith("u_") ? normUser(id.slice(2)) : normUser(body.user);
+        if (!u) return json({ error: "Falta el usuario" }, 400);
+        await store.delete("ban/" + userKey(u));
+        return json({ ok: true });
+      }
       if (route === "owner/vip" && req.method === "POST") {
         const p = await getPlayer(store, cleanId(body.id));
         if (!p) return json({ error: "Jugador no encontrado" }, 404);
-        p.vip = !!body.accept; p.vipReq = null;
+        p.vip = !!body.accept; p.vipReq = null; p.vipAuto = null; p.vipHold = null;
         if (p.vip) { p.vipSince = Date.now(); p.vipLost = null; }
         await putPlayer(store, p);
         return json({ ok: true, player: p });

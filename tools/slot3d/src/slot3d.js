@@ -9,18 +9,25 @@ import {
 } from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
-const SYMS = ['cereza', 'limon', 'naranja', 'sandia', 'uva', 'diamante', 'siete', 'estrella'];
-const EMO = { cereza: '🍒', limon: '🍋', naranja: '🍊', sandia: '🍉', uva: '🍇', diamante: '💎', siete: '7️⃣', estrella: '⭐' };
+// Misma máquina y motor visual para 3 y 5 rodillos; no duplica three.js ni código de materiales.
+function createSlotLayer(five = false) {
+const count = five ? 5 : 3;
+const screenId = five ? 'slotsx' : 'tragaperras';
+const hostId = five ? 'sx-machine' : 'slots-machine';
+const button = () => document.querySelector(five ? '#slotsx .btn-row button.gold' : '#tr-girar');
+const SXN = {'🍒':'cereza','🍋':'limon','🍇':'uva','🔔':'campana','⭐':'estrella','7️⃣':'siete','💎':'diamante'};
+const SYMS = ['cereza', 'limon', 'naranja', 'sandia', 'uva', 'diamante', 'siete', 'estrella', 'campana'];
+const EMO = { cereza: '🍒', limon: '🍋', naranja: '🍊', sandia: '🍉', uva: '🍇', diamante: '💎', siete: '7️⃣', estrella: '⭐', campana: '🔔' };
 const N = 12, STEP = Math.PI * 2 / N, R = 0.62, RW = 0.5, GAP = 0.07;   // rodillo: 12 caras, radio, ancho
-const REEL_X = [-(RW + GAP), 0, RW + GAP], REEL_Z = -0.36;
-const WIN_W = 1.78, WIN_H = 0.98;                                      // ventana de los rodillos
+const REEL_X = Array.from({length:count}, (_,c)=>(c-(count-1)/2)*(RW+GAP)), REEL_Z = -0.36;
+const WIN_W = five ? 2.92 : 1.78, WIN_H = 0.98;                                      // ventana de los rodillos
 const THEMES = {
   verde: { paint: 0x0d6b3a }, azul: { paint: 0x1747b0 }, roja: { paint: 0xa3122a }, oro: { paint: 0xa8780c }
 };
 
 let S = null, broken = false;
 // estado lógico (sobrevive a destroy/init): tiras y posición de cada rodillo
-const L = { reels: [0, 1, 2].map(c => ({ st: [], p: 0, from: 0, to: 0, t0: 0, dur: 0, spin: false, landed: true })), hit: null };
+const L = { reels: Array.from({length:count}, (_,c)=>c).map(c => ({ st: [], p: 0, from: 0, to: 0, t0: 0, dur: 0, spin: false, landed: true })), hit: null };
 
 const now = () => performance.now();
 const rm = () => { try { return (typeof fxRM === 'function') ? fxRM() : document.body.classList.contains('no-anim'); } catch (e) { return false; } };
@@ -99,9 +106,9 @@ function marqueePaint() {
   g.textAlign = 'center'; g.textBaseline = 'middle';
   const gold = g.createLinearGradient(0, 50, 0, 170); gold.addColorStop(0, '#fff6c8'); gold.addColorStop(.5, '#f4c542'); gold.addColorStop(1, '#a8740e');
   g.font = '900 108px Georgia,"Times New Roman",serif'; g.shadowColor = v ? 'rgba(255,205,90,.9)' : 'rgba(255,60,140,.9)'; g.shadowBlur = 24;
-  g.fillStyle = gold; g.fillText(v ? 'ROYAL VIP' : 'ROYAL 777', W / 2, 112);
+  g.fillStyle = gold; g.fillText(v ? (five ? 'ROYAL VIP · 5' : 'ROYAL VIP') : five ? 'ROYAL · 5 LÍNEAS' : 'ROYAL 777', W / 2, 112);
   g.shadowBlur = 10; g.font = '700 40px system-ui,Arial,sans-serif'; g.fillStyle = v ? '#ffe7a3' : '#ffd0ea';
-  const m = (typeof TR_MAQ !== 'undefined' && typeof trMaq !== 'undefined' && TR_MAQ[trMaq]) || null;
+  const m = five ? (typeof SX_MAQ !== 'undefined' && SX_MAQ[sxMaq]) : (typeof TR_MAQ !== 'undefined' && typeof trMaq !== 'undefined' && TR_MAQ[trMaq]) || null;
   g.fillText(v ? 'ZONA VIP · BOTE VIP' : m ? ('MÁQUINA ' + m.name.toUpperCase() + ' · ' + fmt(m.min) + '–' + fmt(m.max)) : 'TRAGAPERRAS', W / 2, 200);
   g.shadowBlur = 0; S.mq.t.needsUpdate = true;
 }
@@ -113,7 +120,7 @@ function bellyTex() {
   g.font = '900 92px Georgia,serif'; g.shadowColor = 'rgba(255,200,80,.9)'; g.shadowBlur = 18; g.fillStyle = '#ffd86b';
   g.fillText('★ ★ ★  BOTE  ★ ★ ★', 512, 118);
   g.shadowBlur = 6; g.font = '600 34px system-ui,Arial,sans-serif'; g.fillStyle = '#e9d7ff';
-  g.fillText('3 estrellas en la línea central', 512, 206);
+  g.fillText(five ? '5 rodillos · 5 líneas · 3 iguales pagan' : '3 estrellas en la línea central', 512, 206);
   S.belly = { g, c };
   return tex(c);
 }
@@ -149,7 +156,7 @@ function reelPanelGeo() {
 }
 function buildMachine(scene) {
   const M = S.m, root = new Group(); scene.add(root); S.root = root;
-  const FW = 2.3, FH = 2.36, FY = -0.14, FZ = 0.24, FD = 0.1;
+  const FW = five ? 3.44 : 2.3, FH = 2.36, FY = -0.14, FZ = 0.24, FD = 0.1;
   // carcasa: caja sin cara frontal (la tapa el panel con el hueco de la ventana)
   const bodyMats = [M.paint, M.paint, M.paint, M.paint, new MeshBasicMaterial({ visible: false }), M.dark];
   add(root, new BoxGeometry(FW, FH, 1.5), bodyMats, 0, FY, FZ - 0.75);
@@ -178,8 +185,29 @@ function buildMachine(scene) {
   // separadores entre rodillos
   [-1, 1].forEach(s => add(root, new BoxGeometry(0.03, WIN_H, 0.5), M.dark, s * (RW + GAP) / 2, 0, REEL_Z + R - 0.22));
   // línea de pago y flechas
-  add(root, new BoxGeometry(WIN_W - 0.06, 0.012, 0.004), M.pay, 0, 0, REEL_Z + R + 0.03, false, false);
+  if (!five) add(root, new BoxGeometry(WIN_W - 0.06, 0.012, 0.004), M.pay, 0, 0, REEL_Z + R + 0.03, false, false);
   [-1, 1].forEach(s => { const t = add(root, new ConeLike(), M.pay, s * (WIN_W / 2 - 0.01), 0, FZ + FD + 0.07, false, false); t.rotation.z = s * Math.PI / 2; });
+  // Líneas 3D: cada línea se dibuja solo sobre las tres celdas que pagan (igual que SX_LINEAS).
+  S.lines = [];
+  if (five) {
+    const patterns = [[0,1,2],[5,6,7],[10,11,12],[0,6,12],[10,6,2]];
+    const colors = [0x36ddff,0xff48be,0x65ffac,0xffb944,0xcf86ff];
+    patterns.forEach((cells,li)=>{
+      const group = new Group(), mat = new MeshBasicMaterial({color:colors[li],transparent:true,opacity:.95,depthTest:false}),
+        glowMat = new MeshBasicMaterial({color:colors[li],transparent:true,opacity:.35,depthTest:false,depthWrite:false,blending:AdditiveBlending});
+      cells.forEach(i=>{ const ring=add(group,new BoxGeometry(RW-.04,.27,.004),glowMat,REEL_X[i%5],(1-Math.floor(i/5))*.31,.392,false,false); ring.renderOrder=3; });
+      for(let j=0;j<cells.length-1;j++) {
+        const a=cells[j], b=cells[j+1], ay=(1-Math.floor(a/5))*.31, by=(1-Math.floor(b/5))*.31;
+        const ax=REEL_X[a%5], bx=REEL_X[b%5], dx=bx-ax, dy=by-ay;
+        const len=Math.hypot(dx,dy)+.04, ang=Math.atan2(dy,dx);
+        const seg=add(group,new BoxGeometry(len,.034,.008),mat,(ax+bx)/2,(ay+by)/2,.40,false,false);
+        seg.rotation.z=ang; seg.renderOrder=5;
+        const glow=add(group,new BoxGeometry(len,.11,.004),glowMat,(ax+bx)/2,(ay+by)/2,.395,false,false);
+        glow.rotation.z=ang; glow.renderOrder=4;
+      }
+      group.visible=false; root.add(group); S.lines.push(group);
+    });
+  }
   // cristal
   add(root, new PlaneGeometry(WIN_W, WIN_H), M.glass, 0, 0, FZ + FD - 0.02, false, false);
   // cartel superior
@@ -209,7 +237,7 @@ function buildMachine(scene) {
   for (let k = 0; k <= 10; k++) { const x = -hw + 2 * hw * k / 10; bx.push([x, hh], [x, -hh]); }
   for (let k = 1; k < 5; k++) { const y = -hh + 2 * hh * k / 5; bx.push([-hw, y], [hw, y]); }
   ring(bx, FZ + FD + 0.06);
-  const mb = []; for (let k = 0; k <= 13; k++) { const x = -1.12 + 2.24 * k / 13; mb.push([x, 1.42 + 0.35], [x, 1.42 - 0.35]); }
+  const mb = []; for (let k = 0; k <= 13; k++) { const x = -(FW/2-.03) + (FW-.06) * k / 13; mb.push([x, 1.42 + 0.35], [x, 1.42 - 0.35]); }
   ring(mb, 0.32);
   const o = new Object3D();
   S.bulbs = M.bulbs.map((m, gi) => {
@@ -267,7 +295,7 @@ function stepCoins(dt, t) {
 /* ---------- tema (máquina y VIP) ---------- */
 function theme() {
   if (!S) return;
-  const m = document.getElementById('slots-machine'); let id = 'verde';
+  const m = document.getElementById(hostId); let id = 'verde';
   if (m) ['verde', 'azul', 'roja', 'oro'].forEach(k => { if (m.classList.contains('slot-' + k)) id = k; });
   const v = vip(), M = S.m;
   if (v) {
@@ -312,6 +340,7 @@ function paintReels(t) {
     const blur = speed > 7;
     for (let j = 0; j < N; j++) {
       const k = j + N * Math.round((base - j) / N);
+      V.panels[j].visible = Math.abs(k-base) < 2.4; // caras traseras tapadas por la carcasa: no dibujarlas
       const s = reelSym(rl, k, c), mat = blur ? S.sym[s].blur : S.sym[s].sharp;
       if (V.panels[j].material !== mat) V.panels[j].material = mat;
     }
@@ -324,33 +353,46 @@ function setPR(pr) { if (!S || S.pr === pr) return; S.pr = pr; S.r.setPixelRatio
 function prFor(spinning) { return (spinning && window.innerWidth <= 900) ? Math.min(1.25, S.prFull) : S.prFull; }
 
 /* ---------- API para el juego ---------- */
+function to3d(st, fin) { // filas del juego (arriba, medio, abajo) -> orden del cilindro (abajo, medio, arriba)
+  const a = st.slice(0, 3), e = st.slice(fin, fin + 3);
+  return { st: [a[2], a[1], a[0], ...st.slice(3, fin), e[2], e[1], e[0]], to: fin };
+}
+function names(st){ return five ? st.map(x=>SXN[x]||x) : st; }
 function sync(d) { // estado en reposo (al entrar en la tragaperras)
   if (!d || !d.st) return;
+  if (five) d = { st: d.st.map(x => names([x[2], x[1], x[0]])), fin: d.st.map(() => 0) };
   d.st.forEach((st, c) => { const rl = L.reels[c]; if (rl.spin) return; rl.st = st.slice(); rl.p = d.fin[c]; });
   if (S) { S.dirty = true; kick(); }
 }
 function spin(d) {
   const t = now();
   L.hit = null;
-  d.st.forEach((st, c) => {
-    const rl = L.reels[c];
-    rl.st = st.slice(); rl.from = 0; rl.p = 0; rl.to = d.fin[c]; rl.t0 = t; rl.dur = d.still ? 0 : d.durs[c]; rl.spin = !d.still; rl.landed = !!d.still;
+  d.st.forEach((st0, c) => {
+    const rl = L.reels[c], conv = five ? to3d(names(st0), d.fin[c]) : { st: st0, to: d.fin[c] }, st = conv.st;
+    rl.st = st.slice(); rl.from = 0; rl.p = 0; rl.to = conv.to; rl.t0 = t; rl.dur = d.still ? 0 : d.durs[c]; rl.spin = !d.still; rl.landed = !!d.still;
     if (d.still) rl.p = rl.to;
   });
   if (S) {
     S.reels.forEach(V => { V.hl.material.opacity = 0; });
+    S.lines.forEach(g=>g.visible=false);
     if (!d.still && !rm()) S.leverT = t; else S.leverT = 0;
     setPR(prFor(!d.still)); S.dirty = true; resize(); kick();
   }
 }
 function result(d) {
   if (!d) return;
+  if (five) {
+    L.lastGrid = d.grid || null;
+    L.hit = d.win ? { hits: [], lines:d.lines || [], t0:now(), big:!!d.bote } : null;
+    if (S && d.cash > 0 && d.net > 0) spawnCoins(d.bote ? 70 : Math.min(30, 10 + Math.ceil(d.cash/Math.max(1,d.ap))));
+  } else {
   const r = d.r || [];
   const hits = [0, 1, 2].map(c => d.st === 3 || (d.cash > 0 && (r[c] === r[(c + 1) % 3] || r[c] === r[(c + 2) % 3]) && r[c] !== 'estrella') || (r[c] === 'estrella' && d.win));
   L.hit = d.win ? { hits, t0: now(), big: d.st === 3 } : null;
   if (S && d.cash > 0 && d.net > 0) {
     const ratio = d.ap > 0 ? d.cash / d.ap : 2;
     spawnCoins(d.st === 3 ? 70 : Math.round(Math.min(60, 8 + ratio * 3)));
+  }
   }
   if (S) { S.dirty = true; kick(); }
 }
@@ -387,6 +429,11 @@ function frame(t) {
     if (Math.abs(V.hl.material.opacity - want) > 0.005) { V.hl.material.opacity = want; S.dirty = true; }
     if (want) anim = true;
   });
+  if (five && S.lines.length) {
+    const show = H && hitAge < (still ? 800 : 2500);
+    S.lines.forEach((g,i)=> { const v=!!(show && H.lines && H.lines.includes(i)); if(g.visible!==v){g.visible=v; S.dirty=true;} });
+    if(show) anim=true;
+  }
   if (stepCoins(dt, t)) anim = true;
   if (anim) S.dirty = true;
   if (S.dirty) { S.r.render(S.scene, S.cam); S.dirty = false; }
@@ -405,7 +452,7 @@ function resize() {
     const nav = document.querySelector('.bottom-nav');
     const navTop = nav && nav.getBoundingClientRect().height ? nav.getBoundingClientRect().top : (window.innerHeight || 800);
     const r = S.stage.getBoundingClientRect();
-    const btn = document.getElementById('tr-girar'), row = btn && btn.closest('.btn-row');
+    const btn = button(), row = btn && btn.closest('.btn-row');
     let bottom = btn ? btn.getBoundingClientRect().bottom : r.bottom + 132;
     if (row) row.querySelectorAll('button').forEach(b => { if (b.offsetParent) bottom = Math.max(bottom, b.getBoundingClientRect().bottom); });
     const need = Math.max(60, bottom - r.bottom + 12);
@@ -417,7 +464,7 @@ function resize() {
   const cam = S.cam; cam.aspect = w / h;
   const vf = cam.fov * Math.PI / 180, hf = 2 * Math.atan(Math.tan(vf / 2) * cam.aspect);
   // encuadre: ventana + palanca siempre; cartel y bandeja si hay altura
-  const needW = 2.85, needH = h < 260 ? 1.55 : h < 330 ? 2.3 : 3.15;
+  const needW = five ? 4.0 : 2.85, needH = h < 260 ? 1.55 : h < 330 ? 2.3 : 3.15;
   const cy = h < 260 ? 0.02 : h < 330 ? 0.18 : 0.12;
   const dist = Math.max(needW / 2 / Math.tan(hf / 2), needH / 2 / Math.tan(vf / 2)) + 0.12;
   const tgt = new Vector3(0.1, cy, 0.2);
@@ -429,8 +476,8 @@ function resize() {
 /* ---------- ciclo de vida ---------- */
 function init() {
   if (S || broken) return;
-  const host = document.getElementById('slots-machine'); if (!host) return;
-  const win = host.querySelector('.slots-window'); if (!win) return;
+  const host = document.getElementById(hostId); if (!host) return;
+  const win = host.querySelector(five ? '#sx-grid' : '.slots-window'); if (!win) return;
   if (!webglOK()) { broken = true; return; }
   let r;
   try { r = new WebGLRenderer({ antialias: (window.devicePixelRatio || 1) < 2, alpha: false, powerPreference: 'default' }); }
@@ -452,7 +499,7 @@ function init() {
     scene.add(new HemisphereLight(0xfff0e0, 0x201028, 0.5));
     const key = new DirectionalLight(0xfff3e0, 2.2); key.position.set(-2.2, 3.6, 4.2); key.castShadow = true;
     key.shadow.mapSize.set(1024, 1024); key.shadow.radius = 4; key.shadow.bias = -0.0006; key.shadow.normalBias = 0.02;
-    Object.assign(key.shadow.camera, { left: -2.2, right: 2.2, top: 2.4, bottom: -2.2, near: 0.5, far: 12 }); key.shadow.camera.updateProjectionMatrix();
+    Object.assign(key.shadow.camera, { left: five ? -3 : -2.2, right: five ? 3 : 2.2, top: 2.4, bottom: -2.2, near: 0.5, far: 12 }); key.shadow.camera.updateProjectionMatrix();
     scene.add(key);
     const rim = new DirectionalLight(0xff6ab0, 0.9); rim.position.set(3, 1.5, -2); scene.add(rim);
     mats(); buildSymbolMats(); buildMachine(scene); buildCoins(scene);
@@ -466,7 +513,7 @@ function init() {
     if (!S) return; const b = canvas.getBoundingClientRect();
     v2.set(((ev.clientX - b.left) / b.width) * 2 - 1, -((ev.clientY - b.top) / b.height) * 2 + 1);
     rc.setFromCamera(v2, S.cam);
-    if (rc.intersectObjects(S.pick, false).length) { const g = document.getElementById('tr-girar'); if (g && !g.disabled) g.click(); }
+    if (rc.intersectObjects(S.pick, false).length) { const g = button(); if (g && !g.disabled) g.click(); }
   };
   canvas.addEventListener('pointerdown', S.onDown);
   win.parentNode.insertBefore(stage, win);
@@ -496,15 +543,22 @@ function destroy() {
   if (s.stage.parentNode) s.stage.parentNode.removeChild(s.stage);
 }
 function check() {
-  const scr = document.getElementById('tragaperras');
+  const scr = document.getElementById(screenId);
   const vis = scr && scr.classList.contains('active') && !document.hidden;
   if (vis) init(); else destroy();
 }
 function boot() {
-  const scr = document.getElementById('tragaperras'); if (!scr) return;
+  const scr = document.getElementById(screenId); if (!scr) return;
   new MutationObserver(check).observe(scr, { attributes: true, attributeFilter: ['class'] });
   document.addEventListener('visibilitychange', check);
   check();
 }
-window.SLOT3D = { sync, spin, result, on: () => !!S, _destroy: destroy, _state: L };
+const api = { sync, spin, result, on: () => !!S, _destroy: destroy, _state: L,
+  visible: () => Array.from({length:3},(_,r)=>L.reels.map(rl=>rl.st[Math.round(rl.p)+(five?2-r:r)])),
+  stats: () => S ? {calls:S.r.info.render.calls, triangles:S.r.info.render.triangles, pixelRatio:S.pr, lines:S.lines.map(g=>g.visible)} : null };
+if(five) window.SX3D=api; else window.SLOT3D=api;
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+
+}
+createSlotLayer(false);
+createSlotLayer(true);
