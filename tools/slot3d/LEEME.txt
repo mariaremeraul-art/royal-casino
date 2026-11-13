@@ -1,0 +1,9 @@
+Tragaperras 3D (Royal Casino) — capa visual, no decide resultados ni pagos.
+- src/slot3d.js      máquina 3D (PBR + RoomEnvironment/PMREM, sombras, rodillos, palanca, bombillas, monedas)
+- src/three-src.js   exports de three.js r187 (amplía ../bj3d/src/three-src.js)
+- src/entry.js       un solo bundle: blackjack 3D (../bj3d/src/bj3d.js) + tragaperras 3D
+- build.mjs          -> dist/casino3d.min.js  (node build.mjs)
+- patch.py           parte de /workspace/royal-casino-backup-antes-slot3d.html y escribe index.html
+                     (cambia el bundle de bj3d por el común, añade CSS y 3 enganches: trInit/trGirar/trPremio)
+- rebuild.sh         build + patch. OJO: sobrescribe index.html desde esa copia; si index.html cambió después, rehaz la copia.
+- shot.mjs / test-fallback.mjs / test-bj.mjs   pruebas rápidas headless -> capturas/
