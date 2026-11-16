@@ -3087,7 +3087,7 @@ async function loadFriends(){
     $('friend-req-box').style.display=reqs.length?'':'none';
     $('friend-reqs').innerHTML=reqs.map(p=>friendRow(p,'req')).join('');
     $('friend-invites-box').style.display=invs.length?'':'none';
-    $('friend-invites').innerHTML=invs.map(i=>`<div class="friend-row"><span class="tor-avatar">${i.avatar||'📩'}</span><span class="nm">${esc(i.name||i.from)}</span><button class="gold" onclick="acceptInvite('${esc(i.code)}')">Entrar ${esc(i.code)}</button></div>`).join('');
+    $('friend-invites').innerHTML=invs.map(i=>`<div class="friend-row"><span class="tor-avatar">${esc(i.avatar||'📩')}</span><span class="nm">${esc(i.name||i.from)}</span><button class="gold" onclick="acceptInvite('${esc(i.code)}')">Entrar ${esc(i.code)}</button></div>`).join('');
     const sent=d.sent||[];
     $('friend-list').innerHTML=(list.length||sent.length)? list.map(p=>friendRow(p,'ok')).join('')+sent.map(p=>friendRow(p,'sent')).join('') : '<div class="info">Nadie aún. Escribe un usuario y pulsa Añadir.</div>';
   }catch(e){ if(err) err.textContent=e.message; }
@@ -3106,7 +3106,7 @@ function friendRow(p, mode){
           <button class="ghost" onclick="friendRemoveSure(this,'${esc(p.user)}')">Quitar</button>`;
   }
   const status = mode==='sent' ? '<span class="st">⏳ solicitud enviada</span>' : st;
-  return `<div class="friend-row"><span class="tor-avatar">${p.avatar||'😎'}</span><span class="nm"><span class="${p.vip?'vip-name':''}"${pAttr('u_'+String(p.user||'').toLowerCase(),p.name||p.user)}>${p.vip?'👑 ':''}${esc(p.name||p.user)}</span> <small style="color:var(--muted)">@${esc(p.user)}</small><br>${status}</span>${acts}</div>`;
+  return `<div class="friend-row"><span class="tor-avatar">${esc(p.avatar||'😎')}</span><span class="nm"><span class="${p.vip?'vip-name':''}"${pAttr('u_'+String(p.user||'').toLowerCase(),p.name||p.user)}>${p.vip?'👑 ':''}${esc(p.name||p.user)}</span> <small style="color:var(--muted)">@${esc(p.user)}</small><br>${status}</span>${acts}</div>`;
 }
 async function friendAdd(){
   if(!authToken) return openAccount();
@@ -3616,7 +3616,7 @@ function rankPublish(){
 function paintRank(list){
   const html=list.length? list.slice(0,12).map((p,i)=>{
     const me=p.id===PLAYER_ID || (accountUser && p.name===playerName);
-    return `<li class="${me?'me':''}"${pAttr(p.id,p.name)}><span class="tor-pos">${i+1}.</span><span class="tor-avatar">${p.avatar||'🎮'}</span><span class="tor-name${p.vip?' vip-name':''}">${me?'Tú · ':''}${p.vip?'👑 ':''}${esc(p.name)}</span><span class="tor-pts">$${Number(p.chips).toLocaleString('de-DE')}</span></li>`;
+    return `<li class="${me?'me':''}"${pAttr(p.id,p.name)}><span class="tor-pos">${i+1}.</span><span class="tor-avatar">${esc(p.avatar||'🎮')}</span><span class="tor-name${p.vip?' vip-name':''}">${me?'Tú · ':''}${p.vip?'👑 ':''}${esc(p.name)}</span><span class="tor-pts">$${Number(p.chips).toLocaleString('de-DE')}</span></li>`;
   }).join('') : '<li style="justify-content:center;color:var(--muted);padding:12px">Aún no hay jugadores</li>';
   ['chip-rank','lobby-chip-rank'].forEach(id=>{ const el=$(id); if(el) el.innerHTML=html; });
 }
@@ -3630,7 +3630,7 @@ function rankRender(){
     .catch(()=>{});
 }
 function rankRefresh(){ rankRender(); SFX.click(); }
-function esc(s){ return String(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 /* ---- Ficha de jugador: tocar un nombre abre sus estadísticas ---- */
 const attrEsc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function pAttr(id,name){ return id ? ' data-pid="'+attrEsc(id)+'" data-pname="'+attrEsc(name||'')+'"' : ''; }
@@ -3699,12 +3699,12 @@ function torRender(){
   const list=$('tor-rank'); if(!list) return;
   const rows=Object.values(torLoad().players||{}).sort((a,b)=>b.pts-a.pts);
   if(!rows.length){ list.innerHTML='<li style="justify-content:center;color:var(--muted);padding:14px">Nadie inscrito. ¡Únete!</li>'; return; }
-  list.innerHTML=rows.map((p,i)=>`<li class="${p.id===PLAYER_ID?'me':''}"${pAttr(p.id,p.name)}><span class="tor-pos">${i+1}.</span><span class="tor-avatar">${p.avatar||'🎮'}</span><span class="tor-name${p.vip?' vip-name':''}">${p.id===PLAYER_ID?'Tú · ':''}${p.vip?'👑 ':''}${esc(p.name)}</span><span class="tor-pts">${Number(p.pts).toLocaleString('de-DE')} pts</span></li>`).join('');
+  list.innerHTML=rows.map((p,i)=>`<li class="${p.id===PLAYER_ID?'me':''}"${pAttr(p.id,p.name)}><span class="tor-pos">${i+1}.</span><span class="tor-avatar">${esc(p.avatar||'🎮')}</span><span class="tor-name${p.vip?' vip-name':''}">${p.id===PLAYER_ID?'Tú · ':''}${p.vip?'👑 ':''}${esc(p.name)}</span><span class="tor-pts">${Number(p.pts).toLocaleString('de-DE')} pts</span></li>`).join('');
 }
 function torFriends(){
   const box=$('tor-friends'); if(!box) return;
   const rows=Object.values(torLoad().players||{});
-  box.innerHTML=rows.length? rows.map(p=>`<span class="tor-avatar" title="${esc(p.name)}"${pAttr(p.id,p.name)}>${p.avatar||'🎮'}</span>`).join('') : '<span style="color:var(--muted)">Sin inscritos</span>';
+  box.innerHTML=rows.length? rows.map(p=>`<span class="tor-avatar" title="${esc(p.name)}"${pAttr(p.id,p.name)}>${esc(p.avatar||'🎮')}</span>`).join('') : '<span style="color:var(--muted)">Sin inscritos</span>';
 }
 function torRefresh(){ rankRender(); torRender(); torFriends(); SFX.click(); }
 function torBtn(){
@@ -4657,7 +4657,7 @@ function pkDrawSeats(){
   $('pk-players').innerHTML=(pkRoom.players||[]).map(p=>{
     const res=pkRoom.phase==='show'&&pkRoom.result, pay=res&&res.payments?res.payments[p.user]:undefined;
     const st=res&&pay!==undefined?((res.winnerIds||[]).includes(p.user)&&pay>0?'🏆 $'+pay:pay>0?'↩ $'+pay:'✗ Pierde'):pkRoom.phase==='dealt'?(p.inHand?(p.revealed?'✓ Revela':'En juego'):'Espera'):(p.ready?'✓ Listo':'…');
-    return `<div class="pk-seat ${p.ready?'ready':''} ${p.connected?'':'offline'}"${pAttr(p.user,p.name)}><div class="nm">${p.avatar||'😎'} ${p.user===you?'Tú · ':''}${esc(p.name)}${p.connected?'':' (off)'}</div><div>${st}${p.bet&&!(res&&pay!==undefined)?' · $'+p.bet:''}</div></div>`;
+    return `<div class="pk-seat ${p.ready?'ready':''} ${p.connected?'':'offline'}"${pAttr(p.user,p.name)}><div class="nm">${esc(p.avatar||'😎')} ${p.user===you?'Tú · ':''}${esc(p.name)}${p.connected?'':' (off)'}</div><div>${st}${p.bet&&!(res&&pay!==undefined)?' · $'+p.bet:''}</div></div>`;
   }).join('');
 }
 function pkApply(st){
@@ -5598,7 +5598,7 @@ try{
 async function db(path, opts){
   opts=opts||{};
   const headers={'content-type':'application/json'};
-  const oc=sessionStorage.getItem('royalOwnerCode'); if(oc) headers['x-owner-code']=oc;
+  const ot=sessionStorage.getItem('royalOwnerTok'); if(ot && /^owner\//.test(path)) headers['x-owner-session']=ot;
   if(authToken && !/^local\./.test(authToken)) headers.Authorization='Bearer '+authToken;
   let res;
   try{ res=await fetch('/db/'+path,{method:opts.method||(opts.body?'POST':'GET'),headers,body:opts.body?JSON.stringify(opts.body):undefined,cache:'no-store'}); }
@@ -5642,11 +5642,12 @@ async function boteRefresh(){
   try{ const r=await db('bote'); boteSrv=r; boteShared=true; }catch(e){ boteShared=false; }
   bonePaint();
 }
+let boteAddP=null;
 function boteAdd(ap, poolIn){
   const pool=poolIn||botePool();
   if(boteShared && boteSrv[pool]!=null) boteSrv[pool]+=Math.floor(ap*.05);
   bonePaint();
-  db('bote/add',{body:{id:PLAYER_ID,pool,ap}}).then(r=>{ boteSrv[pool]=r.amount; boteShared=true; bonePaint(); }).catch(()=>{});
+  boteAddP=db('bote/add',{body:{id:PLAYER_ID,pool,ap}}).then(r=>{ boteSrv[pool]=r.amount; boteShared=true; bonePaint(); }).catch(()=>{});
 }
 // Confeti a pantalla completa al tocar el bote: canvas propio, sin librerías, se quita solo en ~3 s
 function confetiBote(){
@@ -5677,6 +5678,7 @@ function confetiBote(){
 let boteLast=null;
 async function boteWin(poolIn, ap){
   const pool=poolIn||botePool(), tr=!poolIn; boteLast=null;
+  try{ if(boteAddP) await boteAddP; }catch(e){}
   try{ const r=await db('bote/win',{body:{id:PLAYER_ID,pool,ap:ap||0}}); boteSrv[pool]=r.next; boteShared=true; if(tr) trAcum=100; bonePaint();
     if(tr && r.pay!=null) boteLast={pay:r.pay, mult:r.mult}; return r.amount; }
   catch(e){
@@ -5752,7 +5754,7 @@ pedirPrestamo=function(){ go('banco'); };
 (function(){ const og=go; go=function(id){ og.apply(this,arguments); if(id==='banco'){ renderBank(); dbSync(); } }; })();
 
 /* ============ ACCESO DUEÑO ============ */
-sessionStorage.removeItem('royalOwnerCode');
+sessionStorage.removeItem('royalOwnerCode'); sessionStorage.removeItem('royalOwnerTok');
 let ownerMode = false;
 let ownerCache = [];
 (function(){
@@ -5784,20 +5786,21 @@ async function ownerSubmit(){
   if(code.length<6 || ownerBusy) return;
   ownerBusy=true; $('owner-err').textContent='Comprobando…';
   try{
-    await db('owner/login',{body:{code}});
-    sessionStorage.setItem('royalOwnerCode', code); ownerMode=true;
+    const lr=await db('owner/login',{body:{code}});
+    if(!lr || !lr.token) throw new Error('No se pudo abrir el panel');
+    sessionStorage.setItem('royalOwnerTok', lr.token); ownerMode=true;
     $('btn-owner').classList.add('act');
     $('owner-code-bg').classList.remove('show');
     $('owner-bg').classList.add('show'); ownerLoad();
   }catch(e){ $('owner-err').textContent=e.message; ownerInputs().forEach(i=>i.value=''); ownerInputs()[0].focus(); }
   ownerBusy=false;
 }
-function ownerLogout(){ ownerMode=false; sessionStorage.removeItem('royalOwnerCode'); $('btn-owner').classList.remove('act'); $('owner-bg').classList.remove('show'); ownerCache=[]; $('own-list').innerHTML=''; }
+function ownerLogout(){ if(sessionStorage.getItem('royalOwnerTok')) db('owner/logout',{body:{}}).catch(()=>{}).finally(()=>sessionStorage.removeItem('royalOwnerTok')); ownerMode=false; sessionStorage.removeItem('royalOwnerCode'); $('btn-owner').classList.remove('act'); $('owner-bg').classList.remove('show'); ownerCache=[]; $('own-list').innerHTML=''; }
 async function ownerLoad(){
   $('own-list').innerHTML='<p class="own-empty">Cargando jugadores…</p>';
   try{ await dbSync(); const r=await db('owner/players'); ownerCache=r.players||[]; ownerPaint(); }
   catch(e){
-    if(e.status===401){ ownerLogout(); alert('El código ya no es válido, vuelve a entrar.'); return; }
+    if(e.status===401){ ownerLogout(); alert('La sesión del dueño ha caducado, vuelve a entrar con el código.'); return; }
     $('own-list').innerHTML='<p class="own-empty">'+ownerEsc(e.message)+'</p>';
   }
 }

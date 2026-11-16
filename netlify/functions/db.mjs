@@ -1,8 +1,10 @@
 // Base de datos de Royal Casino (Netlify Functions + Netlify Blobs)
 import { getStore } from "@netlify/blobs";
-import { randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
 
-const OWNER_CODE = process.env.OWNER_CODE || "";
+// Código del dueño: SOLO desde la variable de entorno OWNER_CODE (Netlify). Sin valor por defecto: si falta, el panel del dueño queda cerrado.
+const envGet = k => { try { const v = globalThis.Netlify && Netlify.env && Netlify.env.get(k); if (v) return String(v); } catch (e) {} return String(process.env[k] || ""); };
+const OWNER_CODE = envGet("OWNER_CODE").trim();
 const VIP_MIN = 500000; // por debajo de 500.000 fichas (saldo + fichas en una mesa abierta) se pierde el VIP
 const VIP_AUTO = 1000000; // al pedir el VIP con MÁS de 1.000.000 fichas (saldo guardado en el servidor) se concede solo
 const VIP_HOLD_MS = 10 * 60 * 1000; // fichas apostadas en una ronda sin resolver: cuentan para el VIP como mucho 10 min
@@ -30,6 +32,57 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), {
 const cleanId = id => String(id || "").replace(/[^a-zA-Z0-9_\-]/g, "").slice(0, 60);
 const cleanTxt = (t, n) => String(t || "").slice(0, n);
 const num = v => (Number.isFinite(+v) ? +v : 0);
+/* ---- Seguridad: utilidades ---- */
+const sha256 = t => createHash("sha256").update(String(t)).digest("hex");
+// Textos que ven otros jugadores: sin caracteres de control ni de HTML/JS (< > " ' ` & \)
+const cleanName = (t, n) => String(t == null ? "" : t).replace(/[\u0000-\u001f\u007f<>"'`&\\]/g, "").trim().slice(0, n);
+// Compara dos secretos en tiempo constante (HMAC con clave aleatoria por instancia, longitudes iguales)
+const CMP_KEY = randomBytes(32);
+function safeEqual(a, b) {
+  const x = createHmac("sha256", CMP_KEY).update(String(a)).digest(), y = createHmac("sha256", CMP_KEY).update(String(b)).digest();
+  return timingSafeEqual(x, y) && String(a).length === String(b).length;
+}
+const clientIp = (req, ctx) => String((ctx && ctx.ip) || req.headers.get("x-nf-client-connection-ip") || (req.headers.get("x-forwarded-for") || "").split(",")[0] || "0").trim().slice(0, 64);
+// Límite de peticiones en memoria (por instancia de la función): barato, para rutas frecuentes
+const memRl = new Map();
+function rlMem(key, limit, windowMs) {
+  const now = Date.now(); let e = memRl.get(key);
+  if (!e || now - e.s > windowMs) { e = { s: now, n: 0 }; memRl.set(key, e); }
+  e.n++;
+  if (memRl.size > 5000) for (const [k, v] of memRl) if (now - v.s > 600000) memRl.delete(k);
+  return e.n <= limit;
+}
+// Límite de peticiones persistente (Netlify Blobs, compartido entre instancias): para login, registro, recuperación y dueño
+async function rlBlob(store, bucket, key, limit, windowMs, add = 1) {
+  const k = "rl/" + bucket + "/" + sha256(key).slice(0, 40), now = Date.now();
+  let e = null; try { e = await store.get(k, { type: "json" }); } catch (x) {}
+  if (!e || now - num(e.s) > windowMs) e = { s: now, n: 0 };
+  if (e.n >= limit) return false;
+  if (add) { e.n += add; await store.setJSON(k, e); }
+  return true;
+}
+async function rlBlobPeek(store, bucket, key, limit, windowMs) { return rlBlob(store, bucket, key, limit, windowMs, 0); }
+const tooMany = () => json({ error: "Demasiados intentos. Espera unos minutos y vuelve a probar." }, 429);
+const MAX_SALDO = 1e12; // tope duro de fichas (por encima los números dejan de ser exactos)
+const SALDO_FLAG = 50000000; // subidas mayores entre dos guardados quedan marcadas para que el dueño las revise
+// Copia segura de un objeto JSON del cliente: sin __proto__/constructor/prototype, profundidad y nº de claves limitados
+function cleanObj(v, depth = 0) {
+  if (v === null || typeof v === "boolean") return v;
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  if (typeof v === "string") return v.slice(0, 20000);
+  if (depth > 8) return null;
+  if (Array.isArray(v)) return v.slice(0, 2000).map(x => cleanObj(x, depth + 1));
+  if (typeof v === "object") {
+    const out = {}; let n = 0;
+    for (const k of Object.keys(v)) {
+      if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
+      if (++n > 2000) break;
+      out[k.slice(0, 100)] = cleanObj(v[k], depth + 1);
+    }
+    return out;
+  }
+  return null;
+}
 
 async function getPlayer(store, id) { return (await store.get("p/" + id, { type: "json" })) || null; }
 async function putPlayer(store, p) { await store.setJSON("p/" + p.id, p); }
@@ -56,8 +109,8 @@ async function torEntries(store, torId) {
 // Nombre que se enseña: siempre el de la cuenta (nunca "Jugador_XXXX")
 function accName(p) {
   if (!p) return "";
-  if (p.user) return p.user;
-  if (String(p.id || "").startsWith("u_")) return String(p.id).slice(2);
+  if (p.user) return cleanName(p.user, 32);
+  if (String(p.id || "").startsWith("u_")) return cleanName(String(p.id).slice(2), 32);
   return "";
 }
 async function torCurrent(store) {
@@ -142,7 +195,8 @@ function cleanPub(x) {
 }
 
 /* ---- Cuentas y sesiones ---- */
-const SESSION_DAYS = 90, ONLINE_MS = 70 * 1000;
+const SESSION_DAYS = 30, LEGACY_SESSION_DAYS = 90, ONLINE_MS = 70 * 1000;
+const OWNER_SESSION_MS = 8 * 3600e3;
 const normUser = u => String(u || "").trim().toLowerCase();
 const validUser = u => /^[a-z0-9_.\-ñáéíóúü]{3,20}$/i.test(u);
 const userKey = u => encodeURIComponent(normUser(u));
@@ -154,24 +208,54 @@ function checkHash(pass, salt, hash) {
 }
 async function getAcc(store, u) { return (await store.get("acc/" + userKey(u), { type: "json" })) || null; }
 async function putAcc(store, a) { await store.setJSON("acc/" + userKey(a.user), a); }
-async function newSession(store, user) {
-  const token = randomBytes(24).toString("hex");
-  await store.setJSON("sess/" + token, { user: normUser(user), at: Date.now() });
+// Sesiones: token aleatorio de 256 bits; en el servidor solo se guarda su SHA-256 (sess2/<hash>), con caducidad
+async function newSession(store, user, gen) {
+  const token = randomBytes(32).toString("hex");
+  const now = Date.now();
+  await store.setJSON("sess2/" + sha256(token), { user: normUser(user), at: now, exp: now + SESSION_DAYS * 864e5, gen: num(gen) });
   return token;
 }
+const sessCache = new WeakMap();
 async function sessionUser(store, req) {
-  const m = /^Bearer\s+([a-f0-9]{48})$/i.exec(req.headers.get("authorization") || "");
-  if (!m) return "";
-  const s = await store.get("sess/" + m[1], { type: "json" });
-  if (!s || Date.now() - s.at > SESSION_DAYS * 864e5) return "";
-  return s.user;
+  if (sessCache.has(req)) return sessCache.get(req);
+  const p = (async () => {
+    const h = req.headers.get("authorization") || "";
+    let m = /^Bearer\s+([a-f0-9]{64})$/i.exec(h), s = null;
+    if (m) {
+      s = await store.get("sess2/" + sha256(m[1].toLowerCase()), { type: "json" });
+      if (!s || Date.now() > num(s.exp)) return "";
+    } else if ((m = /^Bearer\s+([a-f0-9]{48})$/i.exec(h))) { // sesiones antiguas: valen hasta sus 90 días
+      s = await store.get("sess/" + m[1], { type: "json" });
+      if (!s || Date.now() - num(s.at) > LEGACY_SESSION_DAYS * 864e5) return "";
+      s.gen = 0;
+    } else return "";
+    // Si la cuenta cambió la contraseña (o ya no existe), las sesiones anteriores dejan de valer
+    const a = await getAcc(store, s.user);
+    if (!a || num(a.sessGen) !== num(s.gen)) return "";
+    return normUser(s.user);
+  })();
+  sessCache.set(req, p);
+  return p;
+}
+async function dropSession(store, req) {
+  const h = req.headers.get("authorization") || "";
+  let m = /^Bearer\s+([a-f0-9]{64})$/i.exec(h);
+  if (m) return store.delete("sess2/" + sha256(m[1].toLowerCase()));
+  m = /^Bearer\s+([a-f0-9]{48})$/i.exec(h);
+  if (m) return store.delete("sess/" + m[1]);
+}
+// Sesión del dueño: se obtiene con owner/login y caduca a las 8 h. Solo se guarda el hash.
+async function ownerOk(store, req) {
+  if (!OWNER_CODE) return false;
+  const t = String(req.headers.get("x-owner-session") || "");
+  if (!/^[a-f0-9]{64}$/.test(t)) return false;
+  const s = await store.get("osess/" + sha256(t), { type: "json" });
+  return !!(s && Date.now() < num(s.exp));
 }
 // Las cuentas con usuario en el servidor solo se tocan con su sesión
 async function guardId(store, req, id) {
-  if (!String(id).startsWith("u_")) return true;
-  const u = String(id).slice(2);
-  if (!(await getAcc(store, u))) return true;
-  return (await sessionUser(store, req)) === normUser(u);
+  if (!String(id).startsWith("u_")) return true; // invitados (sin cuenta): no tienen nada que proteger en el servidor
+  return (await sessionUser(store, req)) === normUser(String(id).slice(2)); // ids de cuenta: siempre con su sesión
 }
 async function meOf(store, a) {
   const save = (await store.get("save/" + userKey(a.user), { type: "json" })) || null;
@@ -326,13 +410,21 @@ async function pkMutate(store, code, fn) {
 }
 const pkSeatOk = (t, id, seat) => t && t.seats && t.seats[id] && String(seat || "") !== "" && t.seats[id].secret === String(seat);
 
-export default async (req) => {
+const MAX_BODY = 256 * 1024;
+export default async (req, context) => {
   const store = getStore({ name: "royal-casino", consistency: "strong" });
   const url = new URL(req.url);
   const route = url.pathname.replace(/^\/db\/?/, "");
+  const ip = clientIp(req, context);
+  // Límite general por IP (además del de Netlify en config.rateLimit)
+  if (!rlMem("ip:" + ip, 900, 60000)) return tooMany();
   let body = {};
-  if (req.method === "POST") { try { body = await req.json(); } catch (e) {} }
-  const isOwner = () => !!OWNER_CODE && (req.headers.get("x-owner-code") || "") === OWNER_CODE;
+  if (req.method === "POST" || req.method === "PUT") {
+    if (num(req.headers.get("content-length")) > MAX_BODY) return json({ error: "Petición demasiado grande" }, 413);
+    let raw = ""; try { raw = await req.text(); } catch (e) {}
+    if (raw.length > MAX_BODY) return json({ error: "Petición demasiado grande" }, 413);
+    try { const v = raw ? JSON.parse(raw) : {}; body = v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch (e) { body = {}; }
+  }
 
   try {
     // Cuentas baneadas: no pueden entrar ni jugar online hasta que acabe el baneo
@@ -345,42 +437,68 @@ export default async (req) => {
     }
     /* ---- Cuentas ---- */
     if (route === "register" && req.method === "POST") {
+      if (!(await rlBlob(store, "reg", ip, 10, 3600e3))) return tooMany();
       const user = String(body.user || "").trim(), u = normUser(user), pass = String(body.pass || "");
       if (!validUser(user)) return json({ error: "Usuario: de 3 a 20 letras, números, punto, guion o _" }, 400);
       if (pass.length < 6) return json({ error: "Contraseña: mínimo 6 caracteres" }, 400);
+      if (pass.length > 200) return json({ error: "Contraseña demasiado larga" }, 400);
       const answer = String(body.answer || "").trim().toLowerCase();
       if (!answer) return json({ error: "Escribe una respuesta de recuperación" }, 400);
       if (await getAcc(store, u)) return json({ error: "Ese usuario ya existe" }, 409);
       const salt = randomBytes(16).toString("hex");
       const rec = /^RC-[A-Z0-9]{6}$/.test(String(body.rec || "")) ? String(body.rec) : "RC-" + randomBytes(4).toString("hex").slice(0, 6).toUpperCase();
-      const a = { user, salt, hash: hashPass(pass, salt), question: cleanTxt(body.question, 80), ans: hashPass(answer, salt),
-        rec: hashPass(rec.toLowerCase(), salt), name: cleanTxt(body.name, 24) || user, avatar: cleanTxt(body.avatar, 8) || "🎲", created: Date.now(), migrated: !!body.migrate };
-      await putAcc(store, a);
-      if (body.save && typeof body.save === "object") await store.setJSON("save/" + userKey(u), body.save);
-      return json({ ok: true, token: await newSession(store, u), me: await meOf(store, a), recoveryCode: body.migrate ? undefined : rec });
+      const a = { user, salt, hash: hashPass(pass, salt), question: cleanName(body.question, 80), ans: hashPass(answer.slice(0, 200), salt),
+        rec: hashPass(rec.toLowerCase(), salt), name: cleanName(body.name, 24) || user, avatar: cleanName(body.avatar, 8) || "🎲", created: Date.now(), migrated: !!body.migrate, sessGen: 0 };
+      // Antes de crear la cuenta, comprobamos la partida que trae (tamaño y contenido)
+      let regSave = null;
+      if (body.save && typeof body.save === "object" && !Array.isArray(body.save)) {
+        regSave = cleanObj(body.save);
+        if (JSON.stringify(regSave).length > 200000) return json({ error: "Partida demasiado grande" }, 413);
+        if (regSave.saldo != null) regSave.saldo = Math.max(0, Math.min(MAX_SALDO, Math.floor(num(regSave.saldo))));
+        delete regSave.rev; delete regSave.savedAt;
+      }
+      // Escritura condicionada: si dos registros llegan a la vez con el mismo usuario, solo gana uno
+      const created = await store.setJSON("acc/" + userKey(u), a, { onlyIfNew: true });
+      if (created && created.modified === false) return json({ error: "Ese usuario ya existe" }, 409);
+      if (regSave) await store.setJSON("save/" + userKey(u), regSave);
+      return json({ ok: true, token: await newSession(store, u, 0), me: await meOf(store, a), recoveryCode: body.migrate ? undefined : rec });
     }
     if (route === "login" && req.method === "POST") {
-      const a = await getAcc(store, body.user);
-      if (!a) return json({ error: "NO_ACCOUNT" }, 400);
-      if (!checkHash(String(body.pass || ""), a.salt, a.hash)) return json({ error: "Usuario o contraseña incorrectos" }, 401);
-      return json({ ok: true, token: await newSession(store, a.user), me: await meOf(store, a) });
+      const lu = normUser(body.user).slice(0, 40);
+      // Fuerza bruta: como mucho 20 fallos por IP y 10 por usuario cada 15 min
+      if (!(await rlBlobPeek(store, "loginip", ip, 20, 900e3)) || !(await rlBlobPeek(store, "loginu", lu, 10, 900e3))) return tooMany();
+      const a = await getAcc(store, lu);
+      if (!a) { await rlBlob(store, "loginip", ip, 20, 900e3); return json({ error: "NO_ACCOUNT" }, 400); }
+      if (!checkHash(String(body.pass || "").slice(0, 200), a.salt, a.hash)) {
+        await rlBlob(store, "loginip", ip, 20, 900e3); await rlBlob(store, "loginu", lu, 10, 900e3);
+        return json({ error: "Usuario o contraseña incorrectos" }, 401);
+      }
+      return json({ ok: true, token: await newSession(store, a.user, a.sessGen), me: await meOf(store, a) });
     }
     if (route === "recover-hint" && req.method === "POST") {
+      if (!(await rlBlob(store, "hint", ip, 30, 900e3))) return tooMany();
       const a = await getAcc(store, body.user);
       return a ? json({ question: a.question || "Pregunta de recuperación" }) : json({ error: "NO_ACCOUNT" }, 400);
     }
     if (route === "recover" && req.method === "POST") {
-      const a = await getAcc(store, body.user);
-      if (!a) return json({ error: "NO_ACCOUNT" }, 400);
-      const ans = String(body.answer || "").trim().toLowerCase();
-      if (!checkHash(ans, a.salt, a.ans) && !checkHash(ans, a.salt, a.rec)) return json({ error: "Respuesta incorrecta" }, 401);
+      const ru = normUser(body.user).slice(0, 40);
+      // La respuesta de recuperación es fácil de adivinar: 10 fallos por IP y 5 por usuario cada hora
+      if (!(await rlBlobPeek(store, "recip", ip, 10, 3600e3)) || !(await rlBlobPeek(store, "recu", ru, 5, 3600e3))) return tooMany();
+      const a = await getAcc(store, ru);
+      if (!a) { await rlBlob(store, "recip", ip, 10, 3600e3); return json({ error: "NO_ACCOUNT" }, 400); }
+      const ans = String(body.answer || "").trim().toLowerCase().slice(0, 200);
+      if (!checkHash(ans, a.salt, a.ans) && !checkHash(ans, a.salt, a.rec)) {
+        await rlBlob(store, "recip", ip, 10, 3600e3); await rlBlob(store, "recu", ru, 5, 3600e3);
+        return json({ error: "Respuesta incorrecta" }, 401);
+      }
       const np = String(body.newPass || ""); if (np.length < 6) return json({ error: "Contraseña mínima 6" }, 400);
-      a.hash = hashPass(np, a.salt); await putAcc(store, a);
-      return json({ ok: true, token: await newSession(store, a.user), me: await meOf(store, a) });
+      if (np.length > 200) return json({ error: "Contraseña demasiado larga" }, 400);
+      // Nueva contraseña: se cierran todas las sesiones anteriores de la cuenta
+      a.hash = hashPass(np, a.salt); a.sessGen = num(a.sessGen) + 1; await putAcc(store, a);
+      return json({ ok: true, token: await newSession(store, a.user, a.sessGen), me: await meOf(store, a) });
     }
     if (route === "logout" && req.method === "POST") {
-      const m = /^Bearer\s+([a-f0-9]{48})$/i.exec(req.headers.get("authorization") || "");
-      if (m) await store.delete("sess/" + m[1]);
+      await dropSession(store, req);
       return json({ ok: true });
     }
     if (route === "me" || route === "save" || route.startsWith("friends")) {
@@ -389,8 +507,12 @@ export default async (req) => {
       const a = await getAcc(store, me); if (!a) return json({ error: "Sesión caducada, vuelve a entrar" }, 401);
       if (route === "me" && req.method === "GET") return json({ me: await meOf(store, a) });
       if (route === "save" && (req.method === "PUT" || req.method === "POST")) {
-        let b = {}; if (req.method === "PUT") { try { b = await req.json(); } catch (e) {} } else b = body;
+        if (!rlMem("save:" + me, 60, 60000)) return tooMany();
+        let b = cleanObj(body);
         const txt = JSON.stringify(b || {}); if (txt.length > 200000) return json({ error: "Partida demasiado grande" }, 413);
+        // El VIP, los baneos, el bote, los préstamos y las recargas los decide solo el servidor: se ignoran si vienen en la partida
+        for (const k of ["vip", "vipReq", "vipLost", "vipAuto", "vipHold", "ban", "banned", "bote", "adjust", "loan", "recargado", "recargas", "owner"]) delete b[k];
+        if (b.saldo != null) b.saldo = Math.max(0, Math.min(MAX_SALDO, Math.floor(num(b.saldo))));
         const prev = (await store.get("save/" + userKey(me), { type: "json" })) || null;
         const curRev = num(prev && prev.rev);
         const baseRev = num(b && b.baseRev);
@@ -405,13 +527,16 @@ export default async (req) => {
         delete b.updatedAt;
         delete b.baseRev;
         await store.setJSON("save/" + userKey(me), b);
-        if (b.playerName || b.avatar) { a.name = cleanTxt(b.playerName, 24) || a.name; a.avatar = cleanTxt(b.avatar, 8) || a.avatar; await putAcc(store, a); }
+        if (b.playerName || b.avatar) { a.name = cleanName(b.playerName, 24) || a.name; a.avatar = cleanName(b.avatar, 8) || a.avatar; await putAcc(store, a); }
         // Alinea p.saldo con la partida, sin tocar un ajuste pendiente del dueño
         let vipLost = false;
         if (b.saldo != null) {
           const p = await getPlayer(store, "u_" + me);
           let dirty = false;
           if (p && !num(p.adjust) && (!num(p.saldoAt) || saveNow >= num(p.saldoAt))) {
+            // Subidas enormes entre dos guardados: se aceptan (los juegos van en el navegador) pero quedan marcadas para el dueño
+            const jump = num(b.saldo) - num(p.saldo);
+            if (jump > SALDO_FLAG) { p.flags = (Array.isArray(p.flags) ? p.flags : []).concat({ at: saveNow, from: Math.floor(num(p.saldo)), to: Math.floor(num(b.saldo)), via: "save" }).slice(-20); }
             p.saldo = Math.max(0, num(b.saldo));
             p.saldoAt = saveNow;
             dirty = true;
@@ -439,6 +564,7 @@ export default async (req) => {
       }
       if (route.startsWith("friends/vs/") && req.method === "GET") return json({ vs: [] });
       if (req.method !== "POST") return json({ error: "Ruta no encontrada" }, 404);
+      if (!rlMem("fr:" + me, 30, 60000)) return tooMany();
       const other = normUser(body.user);
       if (!other) return json({ error: "Escribe un usuario" }, 400);
       if (other === me) return json({ error: "No puedes añadirte a ti mismo" }, 400);
@@ -473,7 +599,7 @@ export default async (req) => {
         const code = cleanTxt(body.code, 12).replace(/[^A-Za-z0-9]/g, "");
         if (!code) return json({ error: "Falta la mesa" }, 400);
         theirs.invites = theirs.invites.filter(i => Date.now() - i.at < 3600e3 && i.from !== me).slice(-9);
-        theirs.invites.push({ from: me, name: a.name || a.user, avatar: a.avatar, code, at: Date.now() });
+        theirs.invites.push({ from: me, name: cleanName(a.name, 24) || a.user, avatar: cleanName(a.avatar, 8), code, at: Date.now() });
         await putFr(store, other, theirs); return json({ ok: true });
       }
       return json({ error: "Ruta no encontrada" }, 404);
@@ -481,7 +607,12 @@ export default async (req) => {
 
     /* ---- Jugadores ---- */
     if (route === "sync" && req.method === "POST") {
-      const id = cleanId(body.id); if (id && !(await guardId(store, req, id))) return json({ error: "Sesión caducada, vuelve a entrar" }, 401); if (!id) return json({ error: "Falta id" }, 400);
+      const id = cleanId(body.id); if (!id) return json({ error: "Falta id" }, 400);
+      // Sincronizar exige sesión de cuenta y solo puede tocar su propio jugador (u_<usuario>)
+      const su = await sessionUser(store, req);
+      if (!su || id !== "u_" + su) return json({ error: "Sesión caducada, vuelve a entrar" }, 401);
+      if (!rlMem("sync:" + id, 30, 60000)) return tooMany();
+      const acc = await getAcc(store, su);
       const now = Date.now();
       if (await store.get("del/" + id)) {
         await store.delete("del/" + id); await store.delete("p/" + id);
@@ -491,10 +622,9 @@ export default async (req) => {
       if (!p) p = { id, firstSeen: now, visits: 0, adjust: 0, loan: null, loansHistory: [] };
       if (!p.lastSeen || now - p.lastSeen > 30 * 60 * 1000) p.visits = (p.visits || 0) + 1;
       p.lastSeen = now;
-      p.name = cleanTxt(body.name, 24) || p.name || id;
-      p.avatar = cleanTxt(body.avatar, 8) || p.avatar || "🎲";
-      p.user = cleanTxt(body.user, 32) || p.user || (id.startsWith("u_") ? id.slice(2) : "");
-      if (p.user) p.name = p.user;
+      p.avatar = cleanName(body.avatar, 8) || cleanName(p.avatar, 8) || "🎲";
+      p.user = acc ? acc.user : su; // el nombre público es SIEMPRE el de la cuenta, nunca lo que mande el cliente
+      p.name = p.user; p.acct = true;
       p.games = Math.max(0, Math.floor(num(body.games)));
       p.xp = Math.max(0, Math.floor(num(body.xp)));
       if (body.lv != null) p.lv = Math.max(1, Math.min(100, Math.floor(num(body.lv)) || 1)); // nivel que muestra el jugador (incluye el que conserva de la curva antigua)
@@ -509,7 +639,7 @@ export default async (req) => {
       if (adjust) {
         const newest = (savedAt > num(p.saldoAt) && saveBlob && saveBlob.saldo != null)
           ? num(saveBlob.saldo)
-          : (num(p.saldoAt) ? num(p.saldo) : num(body.saldo));
+          : (num(p.saldoAt) ? num(p.saldo) : Math.max(0, Math.min(MAX_SALDO, Math.floor(num(body.saldo)))));
         p.saldo = Math.max(0, newest + adjust);
         p.saldoAt = now;
       } else if (savedAt && savedAt >= num(p.saldoAt)) {
@@ -518,13 +648,13 @@ export default async (req) => {
       } else if (num(p.saldoAt)) {
         // p.saldo ya es más nuevo (p.ej. ajuste del dueño)
       } else {
-        p.saldo = Math.max(0, num(body.saldo));
+        p.saldo = Math.max(0, Math.min(MAX_SALDO, Math.floor(num(body.saldo))));
         p.saldoAt = now;
       }
       // Si el dueño ha cambiado algo mientras tanto, no lo pisamos
       const fresh = await getPlayer(store, id);
       if (fresh) {
-        for (const k of ["loan", "loansHistory", "vip", "vipReq", "vipLost", "vipAuto", "vipHold", "recargado", "recargas", "recReq"]) p[k] = fresh[k];
+        for (const k of ["loan", "loansHistory", "vip", "vipReq", "vipLost", "vipAuto", "vipHold", "recargado", "recargas", "recReq", "flags", "vipSince"]) p[k] = fresh[k];
         const extra = num(fresh.adjust) - adjust;
         if (extra > 0 || extra < 0) { p.adjust = extra; }
       }
@@ -580,6 +710,7 @@ export default async (req) => {
       const id = cleanId(body.id);
       if (!id) return json({ error: "Falta el jugador" }, 400);
       if (!(await guardId(store, req, id))) return json({ error: "Sesión caducada, vuelve a entrar" }, 401);
+      if (!rlMem("bote:" + id + ":" + ip, 120, 60000)) return tooMany();
       const p = await getPlayer(store, id);
       const pool = ["vip", "sx", "sxvip"].includes(body.pool) ? body.pool : "normal";
       const poolVip = pool === "vip" || pool === "sxvip";
@@ -590,7 +721,19 @@ export default async (req) => {
         if (!u || !(await getAcc(store, u)) || (await sessionUser(store, req)) !== normUser(u))
           return json({ error: "Inicia sesión con tu cuenta para cobrar el bote" }, 401);
       }
-      const ap = Math.max(0, Math.min(poolVip ? 10000000 : pool === "sx" ? 350 : 1000, Math.floor(num(body.ap))));
+      let ap = Math.max(0, Math.min(poolVip ? 10000000 : pool === "sx" ? 350 : 1000, Math.floor(num(body.ap))));
+      if (route === "bote/add" && String(id).startsWith("u_")) {
+        // Se apunta la última tirada de la cuenta: cobrar el bote exige haber apostado en ese bote hace poco
+        await store.setJSON("botebet/" + id, { pool, ap, at: Date.now() });
+      }
+      if (route === "bote/win") {
+        const lb = await store.get("botebet/" + id, { type: "json" });
+        if (!lb || lb.pool !== pool || Date.now() - num(lb.at) > 120000) return json({ error: "Para cobrar el bote tienes que haber apostado en esta máquina hace poco" }, 409);
+        ap = Math.min(ap, num(lb.ap)); // el multiplicador sale de la apuesta real que registró el servidor
+        // Como mucho un bote por cuenta cada hora
+        if (!(await rlBlob(store, "botewin", id, 1, 3600e3))) return json({ error: "Ya cobraste un bote hace poco. Prueba más tarde." }, 429);
+        await store.delete("botebet/" + id);
+      }
       // Tragaperras: el bote se multiplica por apuesta ÷ 5, como mucho ×10 (normal y VIP). Slots de 5 líneas: siempre ×1
       const mult = pool === "sx" || pool === "sxvip" ? 1 : Math.min(BOTE_MAX_MULT, Math.max(1, ap / 5));
       for (let intento = 0; intento < 5; intento++) {
@@ -624,7 +767,9 @@ export default async (req) => {
       if (!id) return json({ error: "Falta el jugador" }, 400);
       if (!(await guardId(store, req, id))) return json({ error: "Sesión caducada, vuelve a entrar" }, 401);
       const now = Date.now();
-      const name = cleanTxt(body.name, 24) || "Jugador", avatar = cleanTxt(body.avatar, 8) || "😎";
+      if (!rlMem("pk:" + id + ":" + ip, 240, 60000)) return tooMany();
+      const pkAcc = id.startsWith("u_") ? id.slice(2) : "";
+      const name = (pkAcc && cleanName(pkAcc, 24)) || cleanName(body.name, 24) || "Jugador", avatar = cleanName(body.avatar, 8) || "😎";
       const out = (r) => r.error ? json({ error: r.error, gone: !!r.gone }, r.status || 400) : json(r.res);
       if (route === "pk/create") {
         // Limpieza de mesas abandonadas (más de 10 min sin actividad)
@@ -723,7 +868,7 @@ export default async (req) => {
           return { write: true, table: t, res: { ok: true } };
         }
         if (act === "chat") {
-          const text = cleanTxt(body.text, 200).trim();
+          const text = cleanTxt(body.text, 200).replace(/[\u0000-\u001f\u007f]/g, " ").trim();
           if (!text) return { error: "Mensaje vacío" };
           t.chatN = num(t.chatN) + 1;
           t.chat = (t.chat || []).concat({ n: t.chatN, id, name: s.name, avatar: s.avatar, text, at: now }).slice(-30);
@@ -743,9 +888,13 @@ export default async (req) => {
     }
     /* ---- Salas online por el servidor del casino (sin depender de la red del jugador) ---- */
     if (route === "sala/send" && req.method === "POST") {
+      if (!rlMem("sala:" + ip, 120, 60000)) return tooMany();
       const code = String(body.code || "").toUpperCase().replace(/[^A-Z0-9_]/g, "").slice(0, 30);
-      const raw = JSON.stringify(body.msg || null);
-      if (!code || !body.msg) return json({ error: "Falta la sala o el mensaje" }, 400);
+      if (!code || !body.msg || typeof body.msg !== "object" || Array.isArray(body.msg)) return json({ error: "Falta la sala o el mensaje" }, 400);
+      body.msg = cleanObj(body.msg);
+      if (typeof body.msg.name === "string") body.msg.name = cleanName(body.msg.name, 24);
+      if (typeof body.msg.avatar === "string") body.msg.avatar = cleanName(body.msg.avatar, 8);
+      const raw = JSON.stringify(body.msg);
       if (raw.length > 6000) return json({ error: "Mensaje demasiado grande" }, 413);
       const key = "sala/" + code;
       for (let intento = 0; intento < 6; intento++) {
@@ -763,6 +912,7 @@ export default async (req) => {
       return json({ error: "Sala muy ocupada, prueba otra vez" }, 409);
     }
     if (route === "sala/poll" && req.method === "GET") {
+      if (!rlMem("salap:" + ip, 600, 60000)) return tooMany();
       const code = String(url.searchParams.get("code") || "").toUpperCase().replace(/[^A-Z0-9_]/g, "").slice(0, 30);
       if (!code) return json({ error: "Falta la sala" }, 400);
       const after = num(url.searchParams.get("after"));
@@ -801,7 +951,9 @@ export default async (req) => {
     if (route === "rank" && req.method === "GET") {
       const { blobs } = await store.list({ prefix: "p/" });
       const players = (await Promise.all(blobs.map(b => store.get(b.key, { type: "json" })))).filter(Boolean);
-      const list = players.filter(p => accName(p)).map(p => ({ id: p.id, name: accName(p), vip: !!p.vip, avatar: p.avatar, chips: Math.floor(num(p.saldo)) }))
+      // Solo cuentas reales (u_<usuario> con cuenta en el servidor): un invitado no puede colarse con un nombre inventado
+      const real = await Promise.all(players.map(async p => String(p.id || "").startsWith("u_") && (p.acct || !!(await getAcc(store, String(p.id).slice(2))))));
+      const list = players.filter((p, i) => real[i] && accName(p)).map(p => ({ id: p.id, name: accName(p), vip: !!p.vip, avatar: cleanName(p.avatar, 8), chips: Math.floor(num(p.saldo)) }))
         .sort((a, b) => b.chips - a.chips).slice(0, 50);
       return json({ list });
     }
@@ -818,14 +970,20 @@ export default async (req) => {
       return json({ ok: true, fee: TOR_FEE, tor: await torView(store) });
     }
     if (route === "tor/points" && req.method === "POST") {
-      const id = cleanId(body.id); const meta = await torCurrent(store);
+      const id = cleanId(body.id);
+      // Solo la propia cuenta con su sesión, y con un tope de puntos por tiempo (antes cualquiera podía sumar puntos a cualquiera)
+      const su = await sessionUser(store, req);
+      if (!su || id !== "u_" + su) return json({ error: "Inicia sesión con tu cuenta para sumar puntos" }, 401);
+      if (!rlMem("torp:" + id, 30, 60000)) return tooMany();
       const pts = Math.max(0, Math.min(500, Math.floor(num(body.pts))));
+      if (!(await rlBlob(store, "torpts", id, 3000, 600e3, pts || 0))) return json({ error: "Demasiados puntos en poco tiempo" }, 429);
+      const meta = await torCurrent(store);
       const key = "tore/" + meta.id + "/" + id;
       const e = await store.get(key, { type: "json" });
       let joined = false, total = null;
       if (e) {
         e.pts += pts;
-        if (body.name && !/^Jugador_/.test(String(body.name))) e.name = cleanTxt(body.name, 24);
+        e.name = cleanName(su, 24);
         await store.setJSON(key, e); joined = true; total = e.pts;
       }
       // Los mismos puntos suman en los torneos especiales en los que estés inscrito
@@ -866,6 +1024,7 @@ export default async (req) => {
       const id = cleanId(body.id); if (id && !(await guardId(store, req, id))) return json({ error: "Sesión caducada, vuelve a entrar" }, 401); const p = id && await getPlayer(store, id);
       if (!p) return json({ error: "Jugador no encontrado" }, 404);
       if (!p.loan) return json({ error: "No tienes ningún préstamo" }, 400);
+      body.saldo = Math.max(0, Math.min(MAX_SALDO, Math.floor(num(body.saldo))));
       if (num(body.saldo) < p.loan.owe) return json({ error: `Necesitas ${p.loan.owe} fichas para devolverlo`, loan: p.loan }, 400);
       const paid = p.loan.owe;
       (p.loansHistory = p.loansHistory || []).push({ ...p.loan, repaidAt: Date.now() });
@@ -877,10 +1036,24 @@ export default async (req) => {
 
     /* ---- Dueño ---- */
     if (route === "owner/login" && req.method === "POST") {
-      return !!OWNER_CODE && String(body.code || "") === OWNER_CODE ? json({ ok: true }) : json({ error: "Código incorrecto" }, 401);
+      if (!OWNER_CODE) return json({ error: "El panel del dueño no está configurado" }, 503);
+      // Fuerza bruta: 5 fallos por IP cada 15 min y 30 fallos en total por hora (bloquea también ataques desde muchas IP)
+      if (!(await rlBlobPeek(store, "ownip", ip, 5, 900e3)) || !(await rlBlobPeek(store, "ownall", "all", 30, 3600e3))) return tooMany();
+      if (!safeEqual(String(body.code || "").slice(0, 128), OWNER_CODE)) {
+        await rlBlob(store, "ownip", ip, 5, 900e3); await rlBlob(store, "ownall", "all", 30, 3600e3);
+        return json({ error: "Código incorrecto" }, 401);
+      }
+      const token = randomBytes(32).toString("hex"), now = Date.now();
+      await store.setJSON("osess/" + sha256(token), { at: now, exp: now + OWNER_SESSION_MS });
+      return json({ ok: true, token, exp: now + OWNER_SESSION_MS });
+    }
+    if (route === "owner/logout" && req.method === "POST") {
+      const t = String(req.headers.get("x-owner-session") || "");
+      if (/^[a-f0-9]{64}$/.test(t)) await store.delete("osess/" + sha256(t));
+      return json({ ok: true });
     }
     if (route.startsWith("owner/")) {
-      if (!isOwner()) return json({ error: "No autorizado" }, 401);
+      if (!(await ownerOk(store, req))) return json({ error: "No autorizado" }, 401);
       if (route === "owner/players" && req.method === "GET") {
         const { blobs } = await store.list({ prefix: "p/" });
         const players = (await Promise.all(blobs.map(b => store.get(b.key, { type: "json" })))).filter(Boolean);
@@ -954,7 +1127,7 @@ export default async (req) => {
         if (!u || !(await getAcc(store, u))) return json({ error: "Solo se pueden banear cuentas con usuario" }, 404);
         const minutes = Math.floor(num(body.minutes));
         if (!(minutes >= 0 && minutes <= 5256000)) return json({ error: "Tiempo no válido" }, 400);
-        const reason = cleanTxt(String(body.reason || "").trim(), 120) || "Sin motivo";
+        const reason = cleanName(body.reason, 120) || "Sin motivo";
         const b = { user: u, until: minutes ? Date.now() + minutes * 60000 : 0, reason, at: Date.now() };
         await store.setJSON("ban/" + userKey(u), b);
         return json({ ok: true, ban: b });
@@ -982,7 +1155,7 @@ export default async (req) => {
       }
       if (route === "owner/ctor" && req.method === "GET") return json({ list: await ctorView(store, ""), max: CTOR_MAX });
       if (route === "owner/ctor" && req.method === "POST") {
-        const name = String(body.name || "").replace(/[<>]/g, "").trim().slice(0, 40);
+        const name = cleanName(body.name, 40);
         const prize = Math.floor(num(body.prize)), fee = Math.floor(num(body.fee)), minutes = Math.floor(num(body.minutes));
         if (name.length < 3) return json({ error: "El nombre necesita al menos 3 letras (máximo 40)" }, 400);
         if (!(prize >= 0 && prize <= 100000000)) return json({ error: "Premio no válido (de 0 a 100.000.000)" }, 400);
@@ -1015,8 +1188,11 @@ export default async (req) => {
     }
     return json({ error: "Ruta no encontrada" }, 404);
   } catch (e) {
-    return json({ error: "Error de base de datos: " + (e.message || e) }, 500);
+    console.error("db error", route, e && e.message ? e.message : e);
+    return json({ error: "Error del servidor, prueba otra vez" }, 500);
   }
 };
 
-export const config = { path: "/db/*" };
+// Límite de Netlify por IP (antes de ejecutar la función). Generoso porque en un aula muchos jugadores comparten IP;
+// los límites finos por ruta/usuario están dentro del código.
+export const config = { path: "/db/*", rateLimit: { windowLimit: 1500, windowSize: 60, aggregateBy: ["ip", "domain"] } };
